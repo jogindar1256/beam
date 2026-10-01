@@ -19,31 +19,41 @@ never interrupt a transfer. The original command-line version still works
 Closing the window keeps Beam running in the tray/menu bar so it can receive. Quit from
 the tray icon. Beam asks first if a transfer is still running.
 
-## Releasing (for the maintainer)
-One-time setup:
-1. Put this folder in a GitHub repository. In `package.json`, replace
-   `YOUR_GITHUB_USERNAME` (in `homepage` and `repository`) with the real owner/repo,
-   or auto-update won't find releases.
-2. Optional but strongly recommended: add code-signing secrets in GitHub → Settings →
-   Secrets and variables → Actions:
-   - Mac (Apple Developer Program, $99/year): `MAC_CERT_P12_BASE64` (a "Developer ID
-     Application" certificate exported as .p12, base64-encoded), `MAC_CERT_PASSWORD`,
-     `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`.
-   - Windows: `WIN_CERT_P12_BASE64`, `WIN_CERT_PASSWORD`. Note: newer Windows
-     certificates are issued on hardware tokens or cloud signing services and can't be
-     exported as a .p12. If yours is one of those, the Windows signing step must be
-     adapted to that provider's signing tool.
-   Without secrets the pipeline still builds, but **unsigned**: Mac users must
-   right-click → Open, Mac auto-update won't work (Apple requires signed apps), and
-   Windows SmartScreen will warn.
+## Website, downloads and releases (all automatic)
 
-Every release:
-1. Bump `version` in `package.json` (e.g. 2.0.1), commit.
-2. `git tag v2.0.1 && git push --tags`
-3. GitHub Actions runs all tests, then builds the Windows installer (x64 + ARM) and
-   Mac apps (Apple Silicon + Intel) and uploads them to a **draft** release.
-4. Check the draft, then press **Publish**. Installed copies update themselves within
-   ~6 hours (or on next launch), never during a transfer.
+**One-time setup (about 10 minutes):**
+1. Create a repository on GitHub (for example `beam`) and push this folder to its
+   `main` branch.
+2. Repository **Settings → Pages → Source: GitHub Actions**.
+3. Repository **Settings → Actions → General → Workflow permissions: Read and write**.
+
+That's it. You don't need to edit any file: the workflows fill in your repository name.
+
+**What happens on every push to `main`:**
+- `website/` is published to GitHub Pages at
+  `https://<your-username>.github.io/<repository>/` whenever it changes.
+- All tests run.
+- If `version` in `package.json` is new, GitHub builds the Windows installer
+  (`Beam-Setup.exe`) and the Mac apps (`Beam-arm64.dmg`, `Beam-x64.dmg`) on its own
+  Windows and Mac machines, checks every file is there, and only then publishes the
+  release. A failed build never produces a half-finished public release.
+- The website's download buttons always point at the latest release, so they update
+  themselves. Installed Windows copies auto-update.
+
+**To release an update:** raise `version` in `package.json` (e.g. `2.1.0` → `2.1.1`),
+commit, push. About 15–20 minutes later it's live.
+
+**Signing (optional, recommended before sharing widely):** add these repository
+secrets (Settings → Secrets and variables → Actions) and the pipeline signs
+automatically:
+- Mac (Apple Developer Program, $99/year): `MAC_CERT_P12_BASE64`, `MAC_CERT_PASSWORD`,
+  `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`. Also enables Mac auto-update.
+- Windows: `WIN_CERT_P12_BASE64`, `WIN_CERT_PASSWORD`. Newer Windows certificates live on
+  hardware tokens or cloud signing services and can't be exported this way; that step
+  then needs adapting to the provider.
+Without secrets, builds are unsigned: Windows shows SmartScreen ("More info → Run
+anyway"), Mac users right-click → Open, and Mac copies don't auto-update. The website's
+Questions section explains these to visitors.
 
 Developing: `npm install`, then `npm run app` (desktop) or `npm start` (command line).
 `npm test` runs the transfer suites; `npm run test:app` drives the real desktop app

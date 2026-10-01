@@ -23,10 +23,10 @@
   "author": {
     "name": "Jogindar"
   },
-  "homepage": "https://github.com/jogindar1256/beam",
+  "homepage": "https://github.com/YOUR_GITHUB_USERNAME/beam",
   "repository": {
     "type": "git",
-    "url": "https://github.com/jogindar1256/beam.git"
+    "url": "https://github.com/YOUR_GITHUB_USERNAME/beam.git"
   },
   "build": {
     "appId": "app.beam.transfer",
@@ -44,7 +44,8 @@
     },
     "publish": [
       {
-        "provider": "github"
+        "provider": "github",
+        "releaseType": "draft"
       }
     ],
     "mac": {
@@ -72,18 +73,19 @@
       "extendInfo": {
         "NSLocalNetworkUsageDescription": "Beam finds your other computers on this network and sends files directly to them.",
         "LSUIElement": false
-      }
+      },
+      "artifactName": "Beam-${arch}-mac.${ext}"
     },
     "dmg": {
-      "title": "Beam ${version}"
+      "title": "Beam ${version}",
+      "artifactName": "Beam-${arch}.${ext}"
     },
     "win": {
       "target": [
         {
           "target": "nsis",
           "arch": [
-            "x64",
-            "arm64"
+            "x64"
           ]
         }
       ]
@@ -94,7 +96,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "include": "build/installer.nsh",
-      "artifactName": "Beam-Setup-${version}.${ext}"
+      "artifactName": "Beam-Setup.${ext}"
     },
     "linux": {
       "target": [
@@ -105,14 +107,11 @@
     }
   },
   "devDependencies": {
-    "electron": "^44.5.1",
-    "electron-builder": "^26.15.3",
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8",
     "playwright-core": "^1.63.0"
   },
   "dependencies": {
     "electron-updater": "^6.8.9"
-  },
-  "allowScripts": {
-    "electron-winstaller@5.4.0": true
   }
 }
