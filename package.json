@@ -1,0 +1,115 @@
+{
+  "name": "beam-agent",
+  "version": "2.1.0",
+  "description": "Fast, resumable, verified file transfer between computers on the same network or hotspot.",
+  "main": "electron/main.js",
+  "bin": {
+    "beam": "src/main.js"
+  },
+  "scripts": {
+    "start": "node src/main.js",
+    "app": "electron .",
+    "test": "node test/state.test.js && node test/hotspot.test.js && node test/speed.test.js && node test/ports.test.js && node test/settings.test.js && node test/network.test.js && node test/e2e.js",
+    "test:quick": "node test/state.test.js && node test/hotspot.test.js && node test/speed.test.js && node test/ports.test.js && node test/settings.test.js",
+    "test:app": "node test/app.test.js",
+    "bench": "node test/smallfiles.bench.js . 8900 80",
+    "dist": "electron-builder --publish never",
+    "release": "electron-builder --publish always"
+  },
+  "engines": {
+    "node": ">=18.15"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Jogindar"
+  },
+  "homepage": "https://github.com/jogindar1256/beam",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jogindar1256/beam.git"
+  },
+  "build": {
+    "appId": "app.beam.transfer",
+    "productName": "Beam",
+    "copyright": "Copyright © 2026 Jogindar",
+    "files": [
+      "src/**/*",
+      "ui/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "publish": [
+      {
+        "provider": "github"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSLocalNetworkUsageDescription": "Beam finds your other computers on this network and sends files directly to them.",
+        "LSUIElement": false
+      }
+    },
+    "dmg": {
+      "title": "Beam ${version}"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "include": "build/installer.nsh",
+      "artifactName": "Beam-Setup-${version}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility",
+      "executableName": "beam"
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8",
+    "playwright-core": "^1.63.0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  }
+}

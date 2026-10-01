@@ -1,0 +1,102 @@
+== state
+PASS 1  transfer interrupted under v1.4 still loads after upgrading  |  3000 blocks recovered
+PASS 2  new format round-trips
+PASS 3  a checkpoint now writes ~1 KB, not the whole file list  |  manifest 921 KB written once; checkpoint 1125 bytes, 1.53 ms
+PASS 4  EMFILE (too many open files) -> waits and retries, then succeeds  |  succeeded on attempt 6
+PASS 5  other errors (e.g. permission denied) still fail immediately
+PASS 6  "system error 24" in the address lookup no longer crashes Beam
+6/6 passed
+
+== hotspot
+PASS 1  raw PowerShell CLIXML error becomes one readable line  |  "Windows refused to start the hotspot: WiFiDeviceOff"
+PASS 2  WiFiDeviceOff -> tells you to turn Wi-Fi on + Dell LAN/WLAN hint  |  Wi-Fi is turned off on this PC, so it cannot host a hotspot. Turn Wi-F...
+PASS 3  every Windows tethering status code has a plain-English message  |  8 codes
+PASS 4  successful start returns name + 10-digit password  |  BeamKXTP / 1225277924
+PASS 5  real PowerShell: failure arrives as a clean sentence, no XML  |  "Cannot find path '/home/claude/agent/System.Runtime.WindowsRuntime.dll' because it does no"
+PASS 6  start/status/stop PowerShell scripts parse cleanly  |  start, status, stop
+PASS 7  macOS system_profiler scan parsed  |  HomeWiFi, Beam-EHBE, Neighbour 5G
+PASS 8  Windows netsh scan parsed (hidden network skipped)  |  HomeWiFi, Beam-EHBE
+PASS 9  "Beam - EHBE" matches the real "Beam-EHBE"; ambiguous names are refused  |  Beam-EHBE / null
+PASS 10 2,000 generated names: no spaces, hyphens, O/0 or I/1 look-alikes
+PASS 11 macOS redacted scan: "<redacted>" entries dropped, flagged as hidden  |  {"networks":[],"hidden":true}
+PASS 12 join is attempted even though macOS hid every name (v1.2 refused here)  |  -setairportnetwork en0 BeamYKJY 6027932382
+PASS 13 sloppy typing "beam - ykjy" / "602 793 2382" is tidied to the real name and password  |  -setairportnetwork en0 BeamYKJY 6027932382
+PASS 14 non-Beam networks are passed through untouched (spaces in password kept)  |  -setairportnetwork en0 HomeWiFi secret pass 1
+PASS 15 "Switch to 2.4 GHz": same name+password, Band = 1, restarts cleanly  |  parses
+15/15 passed
+
+== speed
+PASS 1  Windows 11 netsh: band, channel, link rate, signal  |  {"band":"5","ch":36,"rate":960}
+PASS 2  Windows 10 (no Band line): band inferred from channel 6 -> 2.4 GHz, slow-link tips  |  This link is on 2.4 GHz, the slow, crowd / Link rate is only 72 Mbps: weak signal, 
+PASS 3  Mac on 5 GHz/80 MHz at 866 Mbps: parsed, no warnings  |  {"band":"5","width":80,"rate":866}
+PASS 4  the user's Mac (802.11ax, 2.4 GHz ch 11, 20 MHz, 103 Mbps): flagged with the 5 GHz fix  |  This link is on 2.4 GHz, the slow, crowded band. Connecting both compu...
+PASS 8  netsh blocked by location rule -> link rate still shown via adapter speed  |  780 Mbps, Intel(R) Wi-Fi 6 AX201 160MHz
+PASS 9  user is told exactly which setting unlocks band/channel; no speed guess shown  |  location tip shown
+PASS 10 other netsh failures show the real reason, not "Command failed"  |  The Wireless AutoConfig Service (wlansvc) is not running.
+PASS 5  speed test runs over the real encrypted protocol  |  347.4 MB/s over 4 connections (1732 MB in 5.0 s)
+PASS 6  speed test never touches the receiver's disk  |  save folder untouched
+PASS 7  once paired, repeat tests need no prompts  |  407.3 MB/s
+10/10 passed
+
+== ports
+PASS 1  port 7070 reserved (EACCES) -> uses 7071  |  got 7071
+PASS 2  entire 7000-7099 block reserved -> falls back to an OS-assigned port  |  got 51234
+PASS 3  unrelated errors still surface instead of looping
+PASS 4  busy UI + transfer ports -> agent starts on fallback ports and works  |  UI 47302, transfers 46302
+PASS 5  second launch reuses the running copy instead of crashing  |  Beam is already running: http://127.0.0.1:47302/
+PASS 6  discovery port blocked on one device -> still discovered both ways  |  A sees B: true, B sees A: true
+PASS 7  fatal startup error is readable, no raw stack trace  |  Beam could not start: ENOTDIR: not a directory, mkdir '/home/claude/agent/test/ports.test.js/not-a-dir'
+7/7 passed
+
+== settings
+PASS 1  relative path refused, with an example of a full path  |  Use a full folder path, for example /tmp/beam-set-XWx9rA/home/Downloads/Beam
+PASS 2  a file (not a folder) refused  |  "/tmp/beam-set-XWx9rA/a-file.txt" is a file, not a folder.
+PASS 3  empty path refused  |  Choose a folder to save received files in.
+PASS 4  after refusals the previous folder is still in effect  |  /tmp/beam-set-XWx9rA/Bravo/recv
+PASS 5  a folder that doesn't exist yet is created and accepted  |  /tmp/beam-set-XWx9rA/external drive/Beam inbox/2026
+PASS 6  "~/Received" expands to the home folder  |  /tmp/beam-set-XWx9rA/home/Received
+PASS 7  received file lands in the chosen folder; choice survives restart (saved to disk)
+PASS 8  Browse -> built-in folder browser -> "Save files here" sets the folder  |  /tmp/beam-set-XWx9rA/external drive/Beam inbox
+PASS 9  typing a bad path shows the reason inline; no JS errors  |  "/tmp/beam-set-XWx9rA/a-file.txt" is a file, not a folder.
+9/9 passed
+
+== net
+PASS 1  silent drop: sender notices and starts retrying  |  after 21 s
+PASS 2  silent drop: receiver notices and saves progress  |  after 21 s
+PASS 3  link comes back -> resumes by itself, file intact  |  resumed with 503 MB already there
+PASS 4  resending the same folder: no "(1)" duplicates, nothing re-sent  |  0 duplicates; 182 of 182 KB skipped
+PASS 5  changed file kept beside the old one ("(1)"); unchanged files untouched  |  autoload (1).php, autoload.php
+PASS 6  stale .beampart leftover is replaced, not turned into "(1)"  |  clip.bin
+PASS 7  after giving up, "Retry" sends it (no re-picking files)  |  gave up with: "connect ECONNREFUSED 127.0.0.1:46898. Gave up after 1 min of"
+7/7 passed
+
+== e2e
+PASS 1  discovery finds the other device  |  127.0.0.1:46002
+PASS 2  control panel rejects missing token and foreign Host  |  401 / 403
+PASS 3  pairing codes match on both sides  |  167 545
+PASS 4  files + nested folder + empty file arrive intact, no leftover resume state  |  103 MB/s
+PASS 5  paired device: no re-pairing; identical file sent again is skipped, not duplicated
+PASS 6  sender killed mid-transfer -> restart -> resumes, hash matches  |  receiver kept 646 MB; status was "interrupted"
+PASS 7  receiver killed mid-transfer -> sender auto-retries -> resumes, hash matches  |  checkpoint had 633 MB; resumed from 633 MB; no leftovers
+PASS 8  flipped byte on the wire detected, block re-sent, hash matches  |  tampered frame rejected by AES-GCM
+PASS 9  rejected pairing: transfer refused, device not trusted  |  "Bravo did not confirm the pairing code."
+PASS 10 declined offer reported to sender  |  "Bravo declined the transfer."
+PASS 11 loopback throughput, 1 connection(s)  |  337 MB/s (1.5 GB in 4.5 s)
+PASS 11 loopback throughput, 4 connection(s)  |  290 MB/s (1.5 GB in 5.2 s)
+12/12 passed
+
+== app
+PASS 1  desktop app starts and shows "Beam 2.1.0"  |  Beam 2.1.0 ? DeskApp
+PASS 2  page has no Node access; only the narrow bridge  |  {"require":"undefined","process":"undefined","bridge":"installUpdate,pick,pickSaveFolder,platform"}
+PASS 4  native "Choose files / Choose folder" pickers feed the send list  |  Selected: 1 file(s) (28.6 MB) and 1 folder(s)
+PASS 13 Browse... uses the system folder picker (with "New Folder") and saves the choice  |  /tmp/beam-app-T3PUhD/My Beam Inbox
+PASS 5  pre-2.0 device flagged "update it"; same-version device not flagged  |  OldLaptop127.0.0.1older Beam: update it / OtherPC127.0.0.1
+PASS 6  transfer from the desktop app arrives intact (file + folder)
+PASS 7  closing the window hides it; Beam keeps running in the tray
+PASS 8  second launch exits; the running app shows its window instead
+PASS 9  quitting mid-transfer asks first; "Keep running" keeps the transfer going  |  asked 1 time(s), app still running
+PASS 10 window cannot be navigated to another site; link opens in the browser instead  |  still on 127.0.0.1:47601
+PASS 11 no JavaScript errors in the app window  |  none
+PASS 12 quitting when idle exits cleanly without asking
+12/12 passed
+

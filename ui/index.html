@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beam</title>
+<style>
+  :root { --bg:#E9EDF2; --panel:#FFF; --ink:#17202C; --muted:#5A6678; --line:#CBD3DE; --accent:#2A52F0; --ok:#177A4E; --bad:#B3261E; --warn:#8A5A00;
+          --sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; --mono: ui-monospace, 'SF Mono', Consolas, monospace; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#10151D; --panel:#18202B; --ink:#E6EBF2; --muted:#93A0B3; --line:#2C3746; --accent:#6F8BFF; --ok:#4FC08D; --bad:#F2867D; --warn:#E0B060; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:400 15px/1.5 var(--sans); }
+  header { display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px; padding:20px 24px 8px; max-width:1180px; margin:0 auto; }
+  header h1 { margin:0; font-size:22px; font-weight:600; }
+  header p { margin:0; color:var(--muted); font-size:13px; }
+  main { max-width:1180px; margin:0 auto; padding:8px 24px 48px; display:grid; grid-template-columns: 1.15fr 1fr; gap:16px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; min-width:0; }
+  section h2 { font-size:15px; font-weight:600; margin:0 0 10px; }
+  .full { grid-column: 1 / -1; }
+  .muted { color:var(--muted); font-size:13px; }
+  button { font:500 14px var(--sans); border-radius:8px; padding:7px 12px; cursor:pointer; border:1px solid var(--line); background:transparent; color:var(--ink); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button:focus-visible, input:focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
+  input[type=text], input[type=number], input[type=password] { font:14px var(--sans); padding:7px 9px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); min-width:0; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .grow { flex:1; }
+  .devices { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+  .device { border:1px solid var(--line); border-radius:10px; padding:8px 12px; text-align:left; min-width:150px; }
+  .device small { display:block; color:var(--muted); font-size:12px; }
+  .device[aria-pressed=true] { border-color:var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .crumbs { font-size:13px; color:var(--muted); margin:8px 0; overflow-wrap:anywhere; }
+  .fs { border:1px solid var(--line); border-radius:8px; max-height:340px; overflow:auto; }
+  .fs label, .fs button.entry { display:flex; gap:8px; align-items:center; width:100%; padding:6px 10px; border:0; border-bottom:1px solid var(--line); border-radius:0; font:400 14px var(--sans); text-align:left; }
+  .fs .name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .fs .size { color:var(--muted); font-size:13px; }
+  .picked { margin:10px 0; font-size:14px; }
+  .prompt { border:2px solid var(--accent); }
+  .code { font:600 34px var(--mono); letter-spacing:.08em; margin:6px 0; }
+  .transfer { border-top:1px solid var(--line); padding:10px 0; }
+  .transfer:first-of-type { border-top:0; }
+  .bar { height:8px; background:var(--line); border-radius:4px; overflow:hidden; margin:6px 0; }
+  .bar > div { height:100%; background:var(--accent); }
+  .st-done .bar > div { background:var(--ok); }
+  .err { color:var(--bad); font-size:13px; }
+  .warnc { color:var(--warn); font-size:13px; }
+  .okc { color:var(--ok); font-size:13px; }
+  ul.plain { list-style:none; padding:0; margin:0; }
+  ul.plain li { display:flex; justify-content:space-between; gap:8px; padding:4px 0; }
+  .creds { font:600 22px var(--mono); letter-spacing:.06em; }
+  .creds-table td { padding:2px 14px 2px 0; vertical-align:baseline; }
+  .creds-table td:first-child { color:var(--muted); font-size:13px; }
+  .nets { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+  .nets button { font-size:13px; padding:5px 10px; }
+  .nets button.beam { border-color:var(--accent); color:var(--accent); font-weight:600; }
+  #update-banner section { border-color: var(--ok); }
+  .device small.old { color: var(--warn); }
+  .dirpick { border:1px solid var(--accent); border-radius:8px; padding:8px 10px; margin-bottom:10px; }
+  .netbox { border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin:6px 0 10px; font-size:13px; }
+  .netbox strong { font-weight:600; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="me-name">Beam</h1>
+  <p id="me-addr"></p>
+</header>
+<main>
+  <div class="full" id="update-banner" hidden></div>
+  <div class="full" id="prompts"></div>
+
+  <section>
+    <h2>Send</h2>
+    <div class="devices" id="devices"></div>
+    <p class="muted" id="no-devices">Looking for devices on this network… Open Beam on the other computer. Both must be on the same Wi-Fi, hotspot or cable.</p>
+    <details>
+      <summary class="muted">Device not showing up? Add it by IP address</summary>
+      <div class="row" style="margin-top:8px"><input type="text" id="manual-ip" placeholder="192.168.1.20" class="grow"><button id="btn-add">Add</button></div>
+    </details>
+    <div class="netbox">
+      <div id="link" class="muted">Reading Wi-Fi link…</div>
+      <div class="row" style="margin-top:6px"><button id="btn-speed" disabled>Test network speed</button><span id="speed-msg" class="muted"></span></div>
+    </div>
+    <div class="row" id="native-pick" hidden style="margin-bottom:6px">
+      <button id="btn-pick-files">Choose files…</button><button id="btn-pick-folder">Choose folder…</button>
+      <span class="muted">or browse below</span>
+    </div>
+    <div class="crumbs" id="crumbs"></div>
+    <div class="fs" id="fs"></div>
+    <div class="picked" id="picked">Nothing selected.</div>
+    <button class="primary" id="btn-send" disabled>Send</button>
+    <span class="err" id="send-err"></span>
+  </section>
+
+  <section>
+    <h2>Transfers</h2>
+    <div id="transfers"><p class="muted">No transfers yet.</p></div>
+  </section>
+
+  <section>
+    <h2>Direct Wi-Fi hotspot</h2>
+    <p class="muted">No shared Wi-Fi? One computer starts a hotspot, the other joins it. Traffic goes straight between the two, with no router in between. Faster still: an <strong>Ethernet cable</strong> between PC and Mac (USB-C-to-Ethernet adapter if a computer has no port), or a Thunderbolt cable between two Macs. A plain USB-C cable between a PC and a Mac does not create a network.</p>
+    <div id="hs-create">
+      <button id="btn-hs-start">Start hotspot on this PC</button>
+      <button id="btn-hs-stop" hidden>Stop hotspot</button>
+      <div id="hs-creds" hidden>
+        <p id="hs-status" class="okc"></p>
+        <p class="muted">On the other computer: Beam → Join hotspot → <strong>Scan</strong> → click this network, then type the password.</p>
+        <table class="creds-table"><tr><td>Network</td><td class="creds" id="hs-ssid-show"></td></tr><tr><td>Password</td><td class="creds" id="hs-pass-show"></td></tr></table>
+        <p class="muted" id="hs-band"></p>
+        <button id="btn-hs-band"></button>
+      </div>
+    </div>
+    <p class="muted" id="hs-note"></p>
+    <h2 style="margin-top:14px">Join hotspot</h2>
+    <div class="row" style="margin-bottom:8px"><button id="btn-hs-scan">Scan for networks</button><span class="muted" id="hs-scan-msg"></span></div>
+    <div class="nets" id="hs-nets"></div>
+    <div class="row"><input type="text" id="hs-ssid" placeholder="Network name" class="grow"><input type="text" id="hs-pass" placeholder="Password" class="grow" inputmode="numeric" autocomplete="off"><button id="btn-hs-join">Join</button></div>
+    <p class="muted">Joining disconnects this computer from its current Wi-Fi.</p>
+    <p id="hs-msg" class="muted"></p>
+  </section>
+
+  <section>
+    <h2>Settings</h2>
+    <div class="row" style="margin-bottom:8px"><label class="grow">Device name<br><input type="text" id="set-name" style="width:100%"></label></div>
+    <label for="set-save">Save received files to</label>
+    <div class="row" style="margin:2px 0 4px"><input type="text" id="set-save" class="grow" spellcheck="false"><button id="btn-browse-save">Browse…</button></div>
+    <div id="save-msg" class="muted" style="margin-bottom:8px"></div>
+    <div id="dirpick" class="dirpick" hidden>
+      <div class="crumbs" id="dirpick-path"></div>
+      <div class="fs" id="dirpick-list"></div>
+      <div class="row" style="margin-top:8px"><button id="dirpick-cancel">Cancel</button><button class="primary" id="dirpick-use">Save files here</button></div>
+    </div>
+    <div class="row" style="margin-bottom:8px"><label>Parallel connections<br><input type="number" id="set-conn" min="1" max="16" style="width:90px"></label></div>
+    <label class="row" style="margin-bottom:8px"><input type="checkbox" id="set-auto"> Accept files from paired devices without asking</label>
+    <button id="btn-save-settings">Save settings</button> <span id="set-msg" class="okc"></span>
+    <h2 style="margin-top:16px">Paired devices</h2>
+    <ul class="plain" id="trusted"></ul>
+  </section>
+</main>
+
+<script>
+const TOKEN = '__BEAM_TOKEN__';
+const $ = (s) => document.querySelector(s);
+const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
+const fmt = (b) => { const u = ['B','KB','MB','GB','TB']; let i = 0; while (b >= 1024 && i < 4) { b /= 1024; i++; } return `${b.toFixed(i ? 1 : 0)} ${u[i]}`; };
+const fmtTime = (s) => { if (!isFinite(s) || s <= 0) return ''; s = Math.round(s); const h = Math.floor(s/3600), m = Math.floor(s%3600/60); return h ? `${h}h ${m}m` : m ? `${m}m ${s%60}s` : `${s}s`; };
+async function api(path, body) {
+  const r = await fetch(path, { method: body ? 'POST' : 'GET', headers: { 'x-beam-token': TOKEN, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+let state = null, selectedPeer = null, cwd = null;
+const picked = new Map(); // path -> {name, dir, size}
+let settingsLoaded = false;
+
+function render() {
+  const s = state;
+  $('#me-name').textContent = `Beam ${s.me.version || ''} · ${s.me.name}`;
+  $('#me-addr').textContent = s.me.addresses.length ? `This computer: ${s.me.addresses.map(a => a.address).join(', ')} (port ${s.me.port})` : 'This computer is not on any network.';
+
+  // Prompts
+  $('#prompts').replaceChildren(...s.prompts.map((p) => {
+    const box = el('section', { className: 'prompt' });
+    if (p.kind === 'pair') {
+      box.append(el('h2', { textContent: `Pair with ${p.peerName}?` }),
+        el('p', { className: 'muted', textContent: 'Check that the other computer shows exactly this code. If it doesn\'t, reject: another device is trying to connect.' }),
+        el('div', { className: 'code', textContent: p.code }),
+        el('div', { className: 'row' }, el('button', { textContent: 'Codes differ, reject', onclick: () => api(`/api/prompt/${p.id}`, { ok: false }) }),
+          el('button', { className: 'primary', textContent: 'Codes match, pair', onclick: () => api(`/api/prompt/${p.id}`, { ok: true }) })));
+    } else {
+      const more = p.count > p.names.length ? ` and ${p.count - p.names.length} more` : '';
+      box.append(el('h2', { textContent: `${p.peerName} wants to send ${p.count} file(s), ${fmt(p.totalBytes)}` }),
+        el('p', { className: 'muted', textContent: p.names.slice(0, 5).join(', ') + (p.count > 5 ? `…${more}` : '') }),
+        el('p', { className: 'muted', textContent: `Saves to ${s.settings.saveDir}` }),
+        el('div', { className: 'row' }, el('button', { textContent: 'Decline', onclick: () => api(`/api/prompt/${p.id}`, { ok: false }) }),
+          el('button', { className: 'primary', textContent: 'Accept', onclick: () => api(`/api/prompt/${p.id}`, { ok: true }) })));
+    }
+    return box;
+  }));
+
+  renderUpdate(s);
+  // Devices
+  $('#no-devices').hidden = s.peers.length > 0;
+  if (selectedPeer && !s.peers.some((p) => p.id === selectedPeer)) selectedPeer = null;
+  if (!selectedPeer && s.peers.length === 1) selectedPeer = s.peers[0].id;
+  $('#devices').replaceChildren(...s.peers.map((p) => el('button', {
+    className: 'device', ariaPressed: String(p.id === selectedPeer),
+    onclick: () => { selectedPeer = p.id; render(); },
+  }, p.name, el('small', { textContent: `${p.host}${p.trusted ? ' · paired' : ''}` }), ...versionNote(p, s.me.version))));
+  updateSendButton();
+
+  // Transfers
+  $('#transfers').replaceChildren(...(s.transfers.length ? s.transfers.map(renderTransfer) : [el('p', { className: 'muted', textContent: 'No transfers yet.' })]));
+
+  // Hotspot
+  const caps = s.hotspotCaps;
+  $('#btn-hs-start').hidden = !caps.canCreate || !!s.hotspot;
+  $('#btn-hs-stop').hidden = !s.hotspot;
+  $('#hs-creds').hidden = !s.hotspot;
+  if (s.hotspot) {
+    $('#hs-ssid-show').textContent = s.hotspot.ssid;
+    $('#hs-pass-show').textContent = s.hotspot.password;
+    const is24 = s.hotspot.band === '2.4';
+    $('#hs-band').textContent = is24 ? 'Running on 2.4 GHz: works with every device, but slower.' : 'Running on 5 GHz (faster). If the other computer cannot see this network at all, switch to 2.4 GHz; name and password stay the same.';
+    $('#btn-hs-band').textContent = is24 ? 'Switch back to 5 GHz' : 'Other computer can\'t see it? Switch to 2.4 GHz';
+    $('#btn-hs-band').onclick = async () => {
+      $('#hs-msg').textContent = 'Restarting hotspot…';
+      try { await api('/api/hotspot/start', { band: is24 ? '5' : '2.4' }); $('#hs-msg').textContent = ''; } catch (e) { $('#hs-msg').textContent = e.message; }
+    };
+    const on = s.hotspot.state === 'On';
+    $('#hs-status').className = on ? 'okc' : 'err';
+    $('#hs-status').textContent = s.hotspot.statusError ? `Could not read hotspot status: ${s.hotspot.statusError}`
+      : on ? `Hotspot is on · ${s.hotspot.clients} device(s) connected` : `Hotspot is ${String(s.hotspot.state).toLowerCase()}. Press Stop, then Start again.`;
+  }
+  $('#hs-note').textContent = caps.note;
+
+  // Settings (fill once so typing isn't overwritten)
+  if (!settingsLoaded) {
+    $('#set-name').value = s.settings.name; $('#set-save').value = s.settings.saveDir;
+    $('#set-conn').value = s.settings.connections; $('#set-auto').checked = s.settings.autoAcceptTrusted;
+    settingsLoaded = true;
+  }
+  $('#trusted').replaceChildren(...(s.trusted.length ? s.trusted.map((t) => el('li', {}, el('span', { textContent: t.name }),
+    el('button', { textContent: 'Forget', onclick: () => api(`/api/trusted/${t.id}`, {}) }))) : [el('li', { className: 'muted', textContent: 'None yet. Devices are paired the first time you send between them.' })]));
+}
+
+// Simple x.y.z comparison: -1, 0, 1
+function cmpVer(a, b) {
+  const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
+  for (let i = 0; i < 3; i++) { if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) < (pb[i] || 0) ? -1 : 1; }
+  return 0;
+}
+function versionNote(p, mine) {
+  if (p.manual) return [];
+  if (!p.version) return [el('small', { className: 'old', textContent: 'older Beam: update it' })];
+  if (mine && cmpVer(p.version, mine) < 0) return [el('small', { className: 'old', textContent: `Beam ${p.version}: update it` })];
+  return [];
+}
+function renderUpdate(s) {
+  const u = s.desktop?.update;
+  const box = $('#update-banner');
+  box.hidden = !u || u.state === 'error';
+  if (box.hidden) return;
+  const sec = el('section');
+  if (u.state === 'downloading') sec.append(el('strong', { textContent: `Downloading Beam ${u.version || ''}… ${u.percent || 0}%` }), el('span', { className: 'muted', textContent: '  Transfers continue normally.' }));
+  if (u.state === 'ready') {
+    const busy = s.transfers.some((t) => ['connecting', 'pairing', 'waiting', 'sending', 'receiving', 'reconnecting'].includes(t.status));
+    const btn = el('button', { className: 'primary', textContent: busy ? 'Restart after the transfer' : 'Restart and update', disabled: busy });
+    btn.onclick = () => window.beamDesktop.installUpdate().catch((e) => alert(e.message));
+    sec.append(el('div', { className: 'row' }, el('strong', { className: 'grow', textContent: `Beam ${u.version} is ready to install.` }), btn),
+      el('div', { className: 'muted', textContent: 'It also installs automatically the next time Beam quits. Updates never interrupt a transfer.' }));
+  }
+  box.replaceChildren(sec);
+}
+
+const STATUS = {
+  connecting: 'Connecting…', pairing: 'Confirm the pairing code on both computers', waiting: 'Waiting for the other computer to accept…',
+  sending: 'Sending', receiving: 'Receiving', reconnecting: 'Connection lost, reconnecting…', interrupted: 'Paused: connection lost',
+  done: 'Done', stopped: 'Stopped', failed: 'Failed',
+};
+function renderTransfer(t) {
+  const pct = t.totalBytes ? (t.bytes / t.totalBytes) * 100 : 100;
+  const active = ['sending', 'receiving'].includes(t.status);
+  const dir = t.direction === 'out' ? `To ${t.peerName}` : `From ${t.peerName}`;
+  const eta = active && t.speed > 0 ? ` · ${fmt(t.speed)}/s · ${fmtTime((t.totalBytes - t.bytes) / t.speed)} left` : '';
+  const took = t.status === 'done' && t.finished ? ` in ${fmtTime((t.finished - t.started) / 1000)}` : '';
+  const box = el('div', { className: `transfer st-${t.status}` },
+    el('div', { className: 'row' }, el('strong', { className: 'grow', textContent: `${dir}: ${t.count} file(s), ${fmt(t.totalBytes)}` }),
+      ...(t.direction === 'out' && ['stopped', 'failed'].includes(t.status)
+        ? [el('button', { className: 'primary', textContent: 'Retry', title: 'Continues where it stopped', onclick: () => api(`/api/transfer/${t.id}/retry`, {}).catch((e) => alert(e.message)) })] : []),
+      ['done', 'stopped', 'failed', 'interrupted'].includes(t.status)
+        ? el('button', { textContent: 'Clear', onclick: () => api(`/api/transfer/${t.id}/dismiss`, {}) })
+        : el('button', { textContent: 'Cancel', onclick: () => api(`/api/transfer/${t.id}/cancel`, {}) })),
+    el('div', { className: 'bar' }, el('div', { style: `width:${pct.toFixed(1)}%` })),
+    el('div', { className: 'muted', textContent: `${STATUS[t.status] || t.status}${took} · ${fmt(t.bytes)} of ${fmt(t.totalBytes)}${eta}${t.resumedFrom ? ` · ${fmt(t.resumedFrom)} already on the other computer (skipped)` : ''}` }));
+  if (t.status === 'pairing' && t.pairCode) box.append(el('div', { className: 'warnc', textContent: `Pairing code: ${t.pairCode}` }));
+  if (t.error) box.append(el('div', { className: t.status === 'reconnecting' || t.status === 'interrupted' ? 'warnc' : 'err', textContent: t.error }));
+  if (t.status === 'done' && t.direction === 'in') box.append(el('div', { className: 'okc', textContent: `Saved in ${t.saveDir}` }));
+  return box;
+}
+
+// ---- File browser
+async function browse(p) {
+  try {
+    const r = await api(`/api/fs${p ? `?path=${encodeURIComponent(p)}` : ''}`);
+    cwd = r.path;
+    const rows = [];
+    if (r.path === null) {
+      $('#crumbs').textContent = 'Choose a place to browse';
+      for (const pl of r.places) rows.push(el('button', { className: 'entry', onclick: () => browse(pl.path) }, el('span', { className: 'name', textContent: `📁 ${pl.name}` })));
+    } else {
+      $('#crumbs').textContent = r.path;
+      rows.push(el('button', { className: 'entry', onclick: () => browse(r.parent || '') }, el('span', { className: 'name', textContent: '↩ Up' })));
+      for (const e of r.entries) {
+        const cb = el('input', { type: 'checkbox', checked: picked.has(e.path), onchange: () => { cb.checked ? picked.set(e.path, e) : picked.delete(e.path); updateSendButton(); } });
+        const name = el('span', { className: 'name', textContent: `${e.dir ? '📁 ' : ''}${e.name}` });
+        if (e.dir) { name.style.cursor = 'pointer'; name.onclick = (ev) => { ev.preventDefault(); browse(e.path); }; name.title = 'Open folder'; }
+        rows.push(el('label', {}, cb, name, el('span', { className: 'size', textContent: e.dir ? 'folder' : fmt(e.size) })));
+      }
+      if (!r.entries.length) rows.push(el('p', { className: 'muted', style: 'padding:8px 10px', textContent: 'This folder is empty.' }));
+    }
+    $('#fs').replaceChildren(...rows);
+  } catch (e) { $('#crumbs').textContent = `Cannot open this folder: ${e.message}`; }
+}
+
+function updateSendButton() {
+  const items = [...picked.values()];
+  const files = items.filter((i) => !i.dir), dirs = items.filter((i) => i.dir);
+  $('#picked').textContent = items.length
+    ? `Selected: ${[files.length && `${files.length} file(s) (${fmt(files.reduce((s, f) => s + f.size, 0))})`, dirs.length && `${dirs.length} folder(s)`].filter(Boolean).join(' and ')}`
+    : 'Nothing selected. Tick files or folders above.';
+  const peer = state?.peers.find((p) => p.id === selectedPeer);
+  $('#btn-send').disabled = !items.length || !peer;
+  $('#btn-speed').disabled = !peer || speedRunning;
+  $('#btn-speed').textContent = peer ? `Test network speed to ${peer.name}` : 'Test network speed';
+  $('#btn-send').textContent = peer ? `Send to ${peer.name}` : 'Choose a device';
+}
+
+$('#btn-send').onclick = async () => {
+  $('#send-err').textContent = '';
+  try { await api('/api/send', { peerId: selectedPeer, paths: [...picked.keys()] }); picked.clear(); browse(cwd); updateSendButton(); }
+  catch (e) { $('#send-err').textContent = e.message; }
+};
+$('#btn-add').onclick = async () => {
+  try { await api('/api/peer', { host: $('#manual-ip').value.trim() }); $('#manual-ip').value = ''; } catch (e) { alert(e.message); }
+};
+$('#btn-hs-start').onclick = async () => {
+  $('#hs-msg').textContent = 'Starting hotspot…';
+  try { await api('/api/hotspot/start', {}); $('#hs-msg').textContent = ''; } catch (e) { $('#hs-msg').textContent = e.message; }
+};
+$('#btn-hs-stop').onclick = () => api('/api/hotspot/stop', {}).catch((e) => ($('#hs-msg').textContent = e.message));
+$('#btn-hs-join').onclick = async () => {
+  $('#hs-msg').className = 'muted';
+  $('#hs-msg').textContent = 'Joining… this can take up to 30 seconds.';
+  try {
+    const r = await api('/api/hotspot/join', { ssid: $('#hs-ssid').value.trim(), password: $('#hs-pass').value });
+    $('#hs-msg').className = 'okc';
+    $('#hs-msg').textContent = `Joined ${r.ssid}. The other computer should appear under Send within a few seconds.`;
+  } catch (e) { $('#hs-msg').className = 'err'; $('#hs-msg').textContent = e.message; }
+};
+$('#btn-hs-scan').onclick = async () => {
+  $('#hs-scan-msg').textContent = 'Scanning… (up to 15 seconds on a Mac)';
+  $('#btn-hs-scan').disabled = true;
+  try {
+    const { networks, hidden } = await api('/api/hotspot/scan', {});
+    $('#hs-nets').replaceChildren(...networks.slice(0, 30).map((n) => el('button', {
+      textContent: n, className: /^beam/i.test(n) ? 'beam' : '',
+      onclick: () => { $('#hs-ssid').value = n; $('#hs-pass').focus(); },
+    })));
+    const beams = networks.filter((n) => /^beam/i.test(n)).length;
+    $('#hs-scan-msg').textContent = beams ? `Found ${beams} Beam hotspot(s). Click one, then enter its password.`
+      : hidden ? 'macOS hides nearby network names from apps (a privacy rule since macOS 14.4). Type the name shown on the PC below, e.g. BeamXXXX. Or join it from the Wi-Fi icon in the menu bar; Beam works either way.'
+      : networks.length ? 'No Beam hotspot in range. Is it switched on? On the PC, try "Switch to 2.4 GHz".' : 'No networks found.';
+  } catch (e) { $('#hs-scan-msg').textContent = `Scan failed: ${e.message}`; }
+  $('#btn-hs-scan').disabled = false;
+};
+// ---- Choosing the save folder
+async function useSaveDir(dir) {
+  const msg = $('#save-msg');
+  msg.className = 'muted'; msg.textContent = 'Checking the folder…';
+  try {
+    const r = await api('/api/settings', { saveDir: dir });
+    $('#set-save').value = r.settings.saveDir;
+    msg.className = 'okc'; msg.textContent = `Received files will be saved in ${r.settings.saveDir}`;
+    $('#dirpick').hidden = true;
+    return true;
+  } catch (e) { msg.className = 'err'; msg.textContent = e.message; return false; }
+}
+let dirpickAt = null;
+async function dirpickOpen(p) {
+  try {
+    const r = await api(`/api/fs${p ? `?path=${encodeURIComponent(p)}` : ''}`);
+    dirpickAt = r.path;
+    $('#dirpick-use').disabled = !r.path;
+    $('#dirpick-path').textContent = r.path || 'Choose a place';
+    const rows = [];
+    if (r.path === null) for (const pl of r.places) rows.push(el('button', { className: 'entry', onclick: () => dirpickOpen(pl.path) }, el('span', { className: 'name', textContent: `📁 ${pl.name}` })));
+    else {
+      rows.push(el('button', { className: 'entry', onclick: () => dirpickOpen(r.parent || '') }, el('span', { className: 'name', textContent: '↩ Up' })));
+      for (const e of r.entries.filter((x) => x.dir)) rows.push(el('button', { className: 'entry', onclick: () => dirpickOpen(e.path) }, el('span', { className: 'name', textContent: `📁 ${e.name}` })));
+      if (rows.length === 1) rows.push(el('p', { className: 'muted', style: 'padding:8px 10px', textContent: 'No folders inside. Use this one, or go up.' }));
+    }
+    $('#dirpick-list').replaceChildren(...rows);
+  } catch (e) { $('#dirpick-path').textContent = `Cannot open this folder: ${e.message}`; }
+}
+$('#btn-browse-save').onclick = async () => {
+  if (window.beamDesktop?.pickSaveFolder) { // desktop app: the system's own folder picker
+    const dir = await window.beamDesktop.pickSaveFolder($('#set-save').value.trim());
+    if (dir) await useSaveDir(dir);
+    return;
+  }
+  $('#dirpick').hidden = false; // browser: Beam's built-in folder browser
+  const cur = $('#set-save').value.trim();
+  await dirpickOpen(cur);
+  if (!dirpickAt) await dirpickOpen('');
+};
+$('#dirpick-cancel').onclick = () => { $('#dirpick').hidden = true; };
+$('#dirpick-use').onclick = () => dirpickAt && useSaveDir(dirpickAt);
+$('#set-save').onkeydown = (e) => { if (e.key === 'Enter') useSaveDir($('#set-save').value.trim()); };
+
+$('#btn-save-settings').onclick = async () => {
+  try {
+    await api('/api/settings', { name: $('#set-name').value.trim(), saveDir: $('#set-save').value.trim(), connections: Number($('#set-conn').value), autoAcceptTrusted: $('#set-auto').checked });
+    $('#set-msg').className = 'okc'; $('#set-msg').textContent = 'Saved.'; setTimeout(() => ($('#set-msg').textContent = ''), 2000);
+  } catch (e) { $('#set-msg').className = 'err'; $('#set-msg').textContent = e.message; }
+};
+
+// ---- Wi-Fi link readout + network speed test
+let speedRunning = false, linkData = null;
+async function refreshLink() {
+  try {
+    const l = linkData = await api('/api/link');
+    const box = $('#link');
+    if (!l.supported) { box.textContent = 'Wi-Fi details are not available on this system.'; return; }
+    if (l.error) { box.textContent = `Could not read Wi-Fi details: ${l.error}`; return; }
+    if (!l.connected) { box.textContent = 'This computer is not connected to Wi-Fi (it may be hosting the hotspot or using a cable).'; return; }
+    const parts = [l.standard, l.band && `${l.band} GHz`, l.channel && `channel ${l.channel}`, l.width && `${l.width} MHz`, l.rateMbps && `${l.rateMbps} Mbps link`, l.signal && `signal ${l.signal}`].filter(Boolean);
+    box.replaceChildren(el('strong', { textContent: 'This computer\'s Wi-Fi: ' }), parts.join(' · '));
+    box.append(el('div', { textContent: 'Link rates jump around from moment to moment; "Test network speed" gives the real number.' }));
+    for (const t of l.tips || []) box.append(el('div', { className: 'warnc', textContent: t }));
+  } catch (e) { $('#link').textContent = `Could not read Wi-Fi details: ${e.message}`; }
+}
+$('#btn-speed').onclick = async () => {
+  speedRunning = true; updateSendButton();
+  $('#speed-msg').className = 'muted';
+  $('#speed-msg').textContent = 'Measuring for 8 seconds (memory to memory, no disk)…';
+  try {
+    const r = await api('/api/speedtest', { peerId: selectedPeer, seconds: 8 });
+    $('#speed-msg').className = 'okc';
+    let note = `Network: ${r.MBps} MB/s to ${r.peerName}`;
+    const recent = state.transfers.find((t) => t.status === 'done' && t.finished && t.totalBytes > 200e6);
+    if (recent) {
+      const tMBps = recent.totalBytes / 1e6 / ((recent.finished - recent.started) / 1000);
+      note += tMBps < r.MBps * 0.6 ? ` · your last transfer ran at ${tMBps.toFixed(1)} MB/s, so a disk is slowing it, not the network.` : ' · transfers already run at network speed.';
+    }
+    $('#speed-msg').textContent = note;
+  } catch (e) { $('#speed-msg').className = 'err'; $('#speed-msg').textContent = `Speed test failed: ${e.message}`; }
+  speedRunning = false; updateSendButton();
+};
+refreshLink();
+setInterval(refreshLink, 20000);
+
+// ---- Desktop app: native file pickers
+if (window.beamDesktop) {
+  $('#native-pick').hidden = false;
+  const pick = async (kind) => {
+    const items = await window.beamDesktop.pick(kind);
+    for (const it of items) picked.set(it.path, it);
+    updateSendButton();
+  };
+  $('#btn-pick-files').onclick = () => pick('files');
+  $('#btn-pick-folder').onclick = () => pick('folder');
+}
+
+const es = new EventSource(`/api/events?token=${TOKEN}`);
+es.onmessage = (e) => { state = JSON.parse(e.data); render(); };
+es.onerror = () => { $('#me-addr').textContent = 'Lost contact with the Beam agent. Is it still running?'; };
+browse('');
+</script>
+</body>
+</html>
