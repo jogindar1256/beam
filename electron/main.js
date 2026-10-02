@@ -19,6 +19,19 @@ const fs = require('fs');
 const path = require('path');
 const { startBeam } = require('../src/app');
 
+// Use Beam's own data directory as Electron's userData directory too.
+// This makes requestSingleInstanceLock() use the same lock for the
+// Playwright-launched first instance and the directly spawned second instance.
+const beamDataDir =
+  process.env.BEAM_DATA || path.join(require('os').homedir(), '.beam');
+
+try {
+  fs.mkdirSync(beamDataDir, { recursive: true });
+  app.setPath('userData', beamDataDir);
+} catch (e) {
+  // Keep Electron's default userData path if the configured path is unusable.
+}
+
 let win = null;
 let tray = null;
 let beam = null;
@@ -26,30 +39,8 @@ let quitting = false;
 
 const startHidden = process.argv.includes('--hidden');
 
-/*
- * Keep Electron's single-instance lock in the same data directory
- * that Beam itself uses.
- *
- * This is important because the desktop test starts the first Electron
- * process through Playwright and starts the second process directly.
- * Both processes must therefore use exactly the same Electron userData
- * directory for requestSingleInstanceLock() to work reliably.
- */
-const beamDataDir =
-  process.env.BEAM_DATA || path.join(require('os').homedir(), '.beam');
-
-try {
-  fs.mkdirSync(beamDataDir, { recursive: true });
-  app.setPath('userData', beamDataDir);
-} catch {
-  // If the configured data directory cannot be used,
-  // Electron will continue with its default userData path.
-}
-
-/*
- * One copy per computer/data directory:
- * a second launch brings the first window forward.
- */
+// One copy per computer/data directory:
+// a second launch brings the first window forward.
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
@@ -154,7 +145,9 @@ function openExternal(url) {
 }
 
 function showWindow() {
-  if (!win || win.isDestroyed()) return;
+  if (!win || win.isDestroyed()) {
+    return;
+  }
 
   if (process.platform === 'darwin') {
     app.dock?.show();
@@ -164,13 +157,9 @@ function showWindow() {
     win.restore();
   }
 
-  /*
-   * show() is important here because Test 7 intentionally hides
-   * the existing window before Test 8 starts the second instance.
-   *
-   * moveTop() and focus() make the handoff reliable under Xvfb/Linux
-   * as well as macOS.
-   */
+  // Important for Test 8 on Linux/Xvfb:
+  // Test 7 hides this same window, then the second instance
+  // must make it visible again.
   win.show();
   win.moveTop();
   win.focus();

@@ -121,18 +121,81 @@ async function ev(line, fn, arg) {
   // Plain process, no test tool attached: it should hand off to the running app and exit.
   const second = spawn(require('electron'), [...extraArgs, ROOT_DIR], { env: appEnv, stdio: 'ignore' });
   const secondExited = await new Promise((r) => { second.on('exit', () => r(true)); setTimeout(() => { second.kill('SIGKILL'); r(false); }, 15000); });
-  await sleep(500);
-  const visibleAgain = await ev(100, ({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible());
-  check('8  second launch exits; the running app shows its window instead', !!secondExited && visibleAgain);
+
+  // 8. A second launch exits and brings the first window back
+  // Plain process, no test tool attached: it should hand off to the running app and exit.
+  const second = spawn(
+    require('electron'),
+    [...extraArgs, ROOT_DIR],
+    {
+      env: appEnv,
+      stdio: 'ignore',
+    }
+  );
+
+  const secondExited = await new Promise((resolve) => {
+    let done = false;
+
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      resolve(value);
+    };
+
+    second.once('exit', () => finish(true));
+    second.once('error', () => finish(false));
+
+    setTimeout(() => {
+      try {
+        second.kill('SIGKILL');
+      } catch { }
+
+      finish(false);
+    }, 15000);
+  });
+
+  // Do not use a fixed 500ms sleep here.
+  // GitHub Actions/Xvfb can be slower than macOS.
+  let visibleAgain = false;
+
+  try {
+    await until(
+      async () => {
+        try {
+          return await ev(100, ({ BrowserWindow }) => {
+            const windows = BrowserWindow.getAllWindows();
+
+            return (
+              !!windows.length &&
+              !windows[0].isDestroyed() &&
+              windows[0].isVisible()
+            );
+          });
+        } catch {
+          return false;
+        }
+      },
+      10000,
+      'first window visible after second launch'
+    );
+
+    visibleAgain = true;
+  } catch { }
+
+  check(
+    '8  second launch exits; the running app shows its window instead',
+    !!secondExited && visibleAgain,
+    `secondExited=${!!secondExited}, visibleAgain=${visibleAgain}`
+  );
 
   // 9. Quitting during a transfer asks first (dialog stubbed to answer "Keep running")
   const big = path.join(T, 'big.bin');
   {
-  const fd = fs.openSync(big, 'w');
-  const c = crypto.randomBytes(20e6);
-  for (let i = 0; i < 100; i++) fs.writeSync(fd, c);
-  fs.closeSync(fd);
-} // 2 GB without one huge allocationn
+    const fd = fs.openSync(big, 'w');
+    const c = crypto.randomBytes(20e6);
+    for (let i = 0; i < 100; i++) fs.writeSync(fd, c);
+    fs.closeSync(fd);
+  } // 2 GB without one huge allocationn
 
   await ev(107, ({ dialog }, p) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [p] }); global.__asked = 0; dialog.showMessageBox = async () => { global.__asked++; return { response: 0 }; }; }, big);
 
@@ -168,7 +231,7 @@ async function ev(line, fn, arg) {
 
   // 12. Quit when idle: no question asked, the app exits
   const exited = new Promise((r) => electronApp.process().on('exit', () => r(true)));
-  await ev(135, ({ app }) => { setTimeout(() => app.quit(), 300); }).catch(() => {});
+  await ev(135, ({ app }) => { setTimeout(() => app.quit(), 300); }).catch(() => { });
   check('12 quitting when idle exits cleanly without asking', await Promise.race([exited, sleep(10000).then(() => false)]));
 
   cli.kill('SIGKILL');
@@ -180,8 +243,8 @@ async function ev(line, fn, arg) {
   console.error('ERROR', e.message);
   cli?.kill('SIGKILL');
   // Force-kill: a stuck app would hold Beam's single-instance lock and break the next run.
-  try { electronApp?.process().kill('SIGKILL'); } catch {}
-  try { await electronApp?.close(); } catch {}
+  try { electronApp?.process().kill('SIGKILL'); } catch { }
+  try { await electronApp?.close(); } catch { }
   fs.rmSync(T, { recursive: true, force: true });
   process.exit(1);
 });
