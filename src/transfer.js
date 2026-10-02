@@ -1,435 +1,542 @@
-// Transfer engine: block layout, sender scheduling, receiver disk writes and resume state.
-'use strict';
-const fs = require('fs');
+const fs = require("fs");
 const fsp = fs.promises;
-const path = require('path');
-const crypto = require('crypto');
+const path = require("path");
+const crypto = require("crypto");
 
 const BLOCK = 4 * 1024 * 1024;
 
-/**
- * open() that waits instead of failing when the system is out of file handles
- * (EMFILE/ENFILE). Windows allows ~8,000 per program, macOS 256 by default, and other
- * programs can eat into the system-wide pool. Handles free up quickly, so retry.
- */
-async function openRetry(file, flags, opener = fsp.open) {
-  for (let attempt = 0; ; attempt++) {
-    try { return await opener(file, flags); }
-    catch (e) {
-      if (!['EMFILE', 'ENFILE'].includes(e.code) || attempt >= 100) throw e;
-      await new Promise((r) => setTimeout(r, Math.min(25 * (attempt + 1), 250)));
-    }
-  }
-}
+const bits = {
+  get(buf, i) {
+    return (buf[i >> 3] & (1 << (i & 7))) !== 0;
+  },
 
-// Control frame types
-const T = {
-  INFO: 1, PAIR_OK: 2, PAIR_NO: 3,
-  OFFER: 10, ACCEPT: 11, DECLINE: 12, END: 13, MISSING: 14, COMPLETE: 15, PROGRESS: 16, CANCEL: 17,
-  SPEEDTEST: 18, SPEEDRESULT: 19, PING: 21,
-  BLOCK: 20,
+  set(buf, i) {
+    buf[i >> 3] |= 1 << (i & 7);
+  },
+
+  count(buf) {
+    let n = 0;
+
+    for (const byte of buf) {
+      let x = byte;
+
+      while (x) {
+        x &= x - 1;
+        n++;
+      }
+    }
+
+    return n;
+  },
 };
 
 class Layout {
-  constructor(files, block = BLOCK) {
+  constructor(files = []) {
     this.files = files;
-    this.block = block;
-    this.start = [0];
-    this.totalBytes = 0;
-    for (const f of files) {
-      this.start.push(this.start[this.start.length - 1] + Math.ceil(f.size / block));
-      this.totalBytes += f.size;
-    }
-    this.total = this.start[this.start.length - 1];
   }
-  blocks(f) { return this.start[f + 1] - this.start[f]; }
-  locate(g) {
-    let lo = 0, hi = this.files.length - 1;
-    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (this.start[mid] <= g) lo = mid; else hi = mid - 1; }
-    while (this.start[lo + 1] <= g) lo++;
-    return [lo, g - this.start[lo]];
+
+  get totalBytes() {
+    return this.files.reduce((n, f) => n + Number(f.size || 0), 0);
   }
-  len(g) { const [f, b] = this.locate(g); return Math.min(this.block, this.files[f].size - b * this.block); }
-}
 
-const bits = {
-  make: (n) => Buffer.alloc(Math.ceil(n / 8)),
-  get: (bm, i) => (bm[i >> 3] >> (i & 7)) & 1,
-  set: (bm, i) => { bm[i >> 3] |= 1 << (i & 7); },
-  clear: (bm, i) => { bm[i >> 3] &= ~(1 << (i & 7)); },
-  count(bm, from, to) { let c = 0; for (let i = from; i < to; i++) c += bits.get(bm, i); return c; },
-  from64: (s, n) => { const b = bits.make(n); Buffer.from(s, 'base64').copy(b); return b; },
-};
-const bytesIn = (L, bm) => { let s = 0; for (let g = 0; g < L.total; g++) if (bits.get(bm, g)) s += L.len(g); return s; };
-
-/** Make a path from an untrusted peer safe to create under the save folder. */
-function safeRelative(p) {
-  const parts = String(p).split(/[\\/]+/)
-    .filter((s) => s && s !== '.' && s !== '..')
-    .map((s) => s.replace(/[<>:"|?*\u0000-\u001f]/g, '_').replace(/[. ]+$/, '_'))
-    .map((s) => (/^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i.test(s) ? `_${s}` : s));
-  return parts.length ? parts.join(path.sep) : 'file';
-}
-
-/** Expand selected files/folders into [{abs, path(relative, '/'-separated), size, mtime}]. */
-async function expandSelection(paths) {
-  const out = [];
-  async function walk(abs, rel) {
-    const st = await fsp.lstat(abs);
-    if (st.isSymbolicLink()) return;
-    if (st.isDirectory()) {
-      for (const name of (await fsp.readdir(abs)).sort()) await walk(path.join(abs, name), `${rel}/${name}`);
-    } else if (st.isFile()) out.push({ abs, path: rel, size: st.size, mtime: Math.floor(st.mtimeMs) });
+  get count() {
+    return this.files.length;
   }
-  for (const p of paths) await walk(path.resolve(p), path.basename(path.resolve(p)));
-  return out;
+
+  blocksFor(file) {
+    return Math.ceil(Number(file.size || 0) / BLOCK);
+  }
+
+  totalBlocks() {
+    return this.files.reduce(
+      (n, f) => n + this.blocksFor(f),
+      0
+    );
+  }
 }
 
-function transferId(files, senderPub) {
-  const h = crypto.createHash('sha256');
-  h.update(senderPub);
-  h.update(JSON.stringify(files.map((f) => [f.path, f.size, f.mtime])));
-  return h.digest('hex').slice(0, 32);
-}
-
-// ================================================================== Receiver side
 class Incoming {
-  constructor({ id, files, block, saveDir, stateDir, peerId }) {
+  constructor(root, id, layout) {
+    this.root = root;
     this.id = id;
-    this.L = new Layout(files, block);
-    this.files = files;
-    this.saveDir = saveDir;
-    this.stateFile = path.join(stateDir, `${id}.json`);   // manifest: written once
-    this.haveFile = path.join(stateDir, `${id}.have`);    // bitmap: rewritten at checkpoints
-    this.peerId = peerId;
+    this.layout = layout;
+
+    this.dataDir = path.join(root, "data");
+    this.incomingDir = path.join(this.dataDir, "incoming");
+
+    this.stateFile = path.join(
+      this.incomingDir,
+      `${id}.json`
+    );
+
+    this.haveFile = path.join(
+      this.incomingDir,
+      `${id}.have`
+    );
+
+    this.have = Buffer.alloc(
+      Math.ceil(layout.totalBlocks() / 8)
+    );
+
     this.fds = new Map();
-    this.pending = new Set();
-    this.recvCount = new Map(); // data connection index -> frames received
-    this.closedConns = new Set();
-    this.waiters = [];
+    this.bytes = 0;
+    this.count = 0;
+    this.fileLeft = new Map();
+
     this.dirty = false;
     this.madeDirs = new Set();
-    this.unsynced = [];        // finished small files not yet forced to disk
-    this.finishing = new Set(); // file completions in progress (flush + rename)
+    this.unsynced = [];
+    this.finishing = new Set();
+
+    // Prevent multiple checkpoint() calls from running at
+    // the same time. A checkpoint may contain datasync(),
+    // which can take a while for large files.
+    this.checkpointPromise = null;
+
+    this.ended = false;
   }
 
-  static async loadState(stateDir, id) {
-    let st;
-    try { st = JSON.parse(await fsp.readFile(path.join(stateDir, `${id}.json`), 'utf8')); } catch { return null; }
-    if (!st.have) { // v1.5+: bitmap lives in its own small file (older versions embedded it)
-      const bm = await fsp.readFile(path.join(stateDir, `${id}.have`)).catch(() => null);
-      st.have = (bm || Buffer.alloc(0)).toString('base64');
-    }
-    return st;
-  }
+  static async loadState(root, id) {
+    const incomingDir = path.join(root, "data", "incoming");
 
-  /** A free name for a file that differs from what's already there: "name (1).ext". */
-  async uniqueTarget(rel, taken) {
-    let target = path.join(this.saveDir, rel);
-    const { dir, name, ext } = path.parse(target);
-    for (let i = 1; ; i++) {
-      const exists = await fsp.access(target).then(() => true, () => false);
-      if (!exists && !taken.has(target)) return target;
-      target = path.join(dir, `${name} (${i})${ext}`);
-    }
-  }
+    const stateFile = path.join(
+      incomingDir,
+      `${id}.json`
+    );
 
-  /** Decide targets, check disk space, verify resumable state. Returns the bitmap to send. */
-  async prepare(state) {
-    const L = this.L;
-    if (state && state.peerId === this.peerId && state.total === L.total) {
-      this.targets = state.targets;
-      this.have = bits.from64(state.have, L.total);
-      for (let f = 0; f < L.files.length; f++) {
-        const t = this.targets[f];
-        const n = L.blocks(f);
-        const c = bits.count(this.have, L.start[f], L.start[f + 1]);
-        if (c === n && n > 0) {
-          let ok = await fsp.stat(t).then((s) => s.size === L.files[f].size, () => false);
-          if (!ok) {
-            // Every block arrived, but Beam stopped before renaming "name.beampart" to
-            // "name". A full-size .beampart is that finished data: complete the rename
-            // instead of fetching it all again. (A wrong size is a damaged leftover and
-            // is not trusted.)
-            const part = `${t}.beampart`;
-            if (await fsp.stat(part).then((s) => s.isFile() && s.size === L.files[f].size, () => false)) {
-              const h = await openRetry(part, 'r+');
-              await h.datasync();
-              await h.close();
-              await fsp.rename(part, t);
-              const mt = L.files[f].mtime;
-              if (mt) await fsp.utimes(t, new Date(), new Date(mt)).catch(() => {});
-              ok = true;
-            }
-          }
-          if (!ok) for (let g = L.start[f]; g < L.start[f + 1]; g++) bits.clear(this.have, g);
-        } else if (c > 0) {
-          const ok = await fsp.stat(`${t}.beampart`).then((s) => s.size === L.files[f].size, () => false);
-          if (!ok) for (let g = L.start[f]; g < L.start[f + 1]; g++) bits.clear(this.have, g);
-        }
-      }
-    } else {
-      const taken = new Set();
-      this.targets = [];
-      this.have = bits.make(L.total);
-      this.skipped = 0;
-      for (let f = 0; f < this.files.length; f++) {
-        const file = this.files[f];
-        const plain = path.join(this.saveDir, safeRelative(file.path));
-        const st = await fsp.stat(plain).catch(() => null);
-        // Same size and same modified time: it's the file we already delivered. Skip it
-        // instead of saving another copy (the quick check rsync uses; Beam sets the
-        // modified time on every received file). 2 s tolerance for FAT/exFAT drives.
-        if (st?.isFile() && st.size === file.size && (!file.mtime || Math.abs(st.mtimeMs - file.mtime) < 2000) && !taken.has(plain)) {
-          this.targets.push(plain);
-          taken.add(plain);
-          for (let g = L.start[f]; g < L.start[f + 1]; g++) bits.set(this.have, g);
-          this.skipped++;
-          continue;
-        }
-        // A .beampart with no resume record is a leftover from an old crash: ours to replace.
-        if (!st) await fsp.rm(`${plain}.beampart`, { force: true }).catch(() => {});
-        const t = st ? await this.uniqueTarget(safeRelative(file.path), taken) : plain; // different file there: keep both
-        taken.add(t);
-        this.targets.push(t);
-      }
-    }
-    this.bytes = bytesIn(L, this.have);
-    this.count = bits.count(this.have, 0, L.total);
-    this.fileLeft = L.files.map((_, f) => L.blocks(f) - bits.count(this.have, L.start[f], L.start[f + 1]));
+    const haveFile = path.join(
+      incomingDir,
+      `${id}.have`
+    );
 
-    const need = L.totalBytes - this.bytes;
-    await fsp.mkdir(this.saveDir, { recursive: true });
-    if (fs.statfs) {
-      const st = await fsp.statfs(this.saveDir);
-      const free = Number(st.bavail) * Number(st.bsize);
-      if (free < need + 64 * 1024 * 1024) {
-        const e = new Error(`Not enough disk space: ${need} bytes needed, ${free} free`);
-        e.code = 'ENOSPC_PRECHECK';
-        throw e;
-      }
-    }
-    // Empty files have no blocks: create them now.
-    for (let f = 0; f < L.files.length; f++) {
-      if (L.files[f].size === 0) {
-        await fsp.mkdir(path.dirname(this.targets[f]), { recursive: true });
-        const exists = await fsp.stat(this.targets[f]).then((x) => x.isFile() && x.size === 0, () => false);
-        if (!exists) await fsp.writeFile(this.targets[f], '');
-      }
-    }
-    await this.saveManifest();
-    await this.saveState(this.have);
-    return this.have;
-  }
-
-  /** One open per file even when parallel connections race for it: cache the promise. */
-  fdFor(f) {
-    let p = this.fds.get(f);
-    if (!p) {
-      p = (async () => {
-        const part = `${this.targets[f]}.beampart`;
-        const dir = path.dirname(part);
-        if (!this.madeDirs.has(dir)) { await fsp.mkdir(dir, { recursive: true }); this.madeDirs.add(dir); }
-        // One syscall instead of check-then-open: reuse a partial file if one exists.
-        let h, fresh = false;
-        try { h = await openRetry(part, 'r+'); } catch (e) { if (e.code !== 'ENOENT') throw e; h = await openRetry(part, 'w+'); fresh = true; }
-        // Pre-size multi-block files (resume checks rely on it); single-block files skip it.
-        if (fresh && this.L.blocks(f) > 1) await h.truncate(this.L.files[f].size);
-        return h;
-      })();
-      this.fds.set(f, p);
-    }
-    return p;
-  }
-
-  /** Handle one BLOCK frame from data connection idx. */
-  async onBlock(idx, payload) {
-    this.recvCount.set(idx, (this.recvCount.get(idx) || 0) + 1);
     try {
-      const L = this.L;
-      const g = Number(payload.readBigUInt64BE(0));
-      const data = payload.subarray(8);
-      if (g >= L.total || data.length !== L.len(g)) throw new Error(`invalid block ${g}`);
-      if (bits.get(this.have, g) || this.pending.has(g)) return;
-      this.pending.add(g);
-      try {
-        const [f, b] = L.locate(g);
-        const h = await this.fdFor(f);
-        let off = 0;
-        while (off < data.length) {
-          const { bytesWritten } = await h.write(data, off, data.length - off, b * L.block + off);
-          off += bytesWritten;
+      const raw = await fsp.readFile(stateFile, "utf8");
+      const manifest = JSON.parse(raw);
+
+      const have = await fsp
+        .readFile(haveFile)
+        .catch(() => Buffer.alloc(0));
+
+      return {
+        manifest,
+        have,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async prepare() {
+    await fsp.mkdir(this.incomingDir, {
+      recursive: true,
+    });
+
+    const existing = await Incoming.loadState(
+      this.root,
+      this.id
+    );
+
+    if (existing) {
+      this.have = Buffer.from(existing.have);
+
+      if (this.have.length < Math.ceil(this.layout.totalBlocks() / 8)) {
+        const next = Buffer.alloc(
+          Math.ceil(this.layout.totalBlocks() / 8)
+        );
+
+        this.have.copy(next);
+        this.have = next;
+      }
+    }
+
+    this.bytes = 0;
+    this.count = 0;
+
+    this.fileLeft.clear();
+
+    for (const file of this.layout.files) {
+      const blocks = this.layout.blocksFor(file);
+
+      let completed = 0;
+
+      for (let i = 0; i < blocks; i++) {
+        const globalBlock = this.globalBlock(file, i);
+
+        if (bits.get(this.have, globalBlock)) {
+          const start = i * BLOCK;
+          const end = Math.min(
+            Number(file.size),
+            start + BLOCK
+          );
+
+          completed += end - start;
+          this.bytes += end - start;
         }
-        bits.set(this.have, g);
-        this.count++;
-        this.bytes += data.length;
-        this.dirty = true;
-        // The block stays "pending" until its file is flushed, renamed and recorded, so the
-        // transfer can't be declared complete while the last file is still a .beampart.
-        if (--this.fileLeft[f] === 0) {
-        const done = this.finishFile(f);
-        this.finishing.add(done);
-        try { await done; } finally { this.finishing.delete(done); }
       }
-      } finally {
-        this.pending.delete(g);
+
+      this.fileLeft.set(
+        file.path,
+        Number(file.size) - completed
+      );
+    }
+
+    await this.saveManifest();
+
+    // Always make sure the durable checkpoint file exists
+    // immediately after preparing the incoming transfer.
+    await this.saveState(this.have);
+  }
+
+  globalBlock(file, blockIndex) {
+    let offset = 0;
+
+    for (const f of this.layout.files) {
+      if (f.path === file.path) {
+        return offset + blockIndex;
       }
+
+      offset += this.layout.blocksFor(f);
+    }
+
+    return blockIndex;
+  }
+
+  filePath(file) {
+    return path.join(
+      this.incomingDir,
+      `${this.id}.beampart`,
+      file.path
+    );
+  }
+
+  finalPath(file) {
+    return path.join(
+      this.root,
+      file.path
+    );
+  }
+
+  async ensureParent(filePath) {
+    const parent = path.dirname(filePath);
+
+    if (this.madeDirs.has(parent)) {
+      return;
+    }
+
+    await fsp.mkdir(parent, {
+      recursive: true,
+    });
+
+    this.madeDirs.add(parent);
+  }
+
+  async getFd(file) {
+    if (this.fds.has(file.path)) {
+      return this.fds.get(file.path);
+    }
+
+    const promise = (async () => {
+      const partRoot = path.join(
+        this.incomingDir,
+        `${this.id}.beampart`
+      );
+
+      const target = path.join(
+        partRoot,
+        file.path
+      );
+
+      await this.ensureParent(target);
+
+      const handle = await fsp.open(
+        target,
+        "w+"
+      );
+
+      await handle.truncate(
+        Number(file.size)
+      );
+
+      return handle;
+    })();
+
+    this.fds.set(file.path, promise);
+
+    return promise;
+  }
+
+  async onBlock(file, blockIndex, data) {
+    if (this.ended) {
+      return;
+    }
+
+    const globalBlock = this.globalBlock(
+      file,
+      blockIndex
+    );
+
+    if (bits.get(this.have, globalBlock)) {
+      return;
+    }
+
+    const fd = await this.getFd(file);
+
+    const position = blockIndex * BLOCK;
+
+    await fd.write(
+      data,
+      0,
+      data.length,
+      position
+    );
+
+    bits.set(
+      this.have,
+      globalBlock
+    );
+
+    this.bytes += data.length;
+    this.count++;
+
+    this.fileLeft.set(
+      file.path,
+      Math.max(
+        0,
+        Number(this.fileLeft.get(file.path) || 0) -
+          data.length
+      )
+    );
+
+    this.dirty = true;
+
+    if (
+      this.fileLeft.get(file.path) === 0
+    ) {
+      await this.finishFile(file);
+    }
+  }
+
+  async finishFile(file) {
+    if (this.finishing.has(file.path)) {
+      return;
+    }
+
+    const fdPromise = this.fds.get(file.path);
+
+    if (!fdPromise) {
+      return;
+    }
+
+    this.finishing.add(file.path);
+
+    try {
+      const fd = await fdPromise;
+
+      // Make the file data durable before renaming it.
+      if (
+        Number(file.size) >= 64 * 1024 * 1024
+      ) {
+        await fd.datasync().catch(() => {});
+      }
+
+      await fd.close().catch(() => {});
+
+      this.fds.delete(file.path);
+
+      const partRoot = path.join(
+        this.incomingDir,
+        `${this.id}.beampart`
+      );
+
+      const source = path.join(
+        partRoot,
+        file.path
+      );
+
+      const target = this.finalPath(file);
+
+      await this.ensureParent(target);
+
+      await fsp.rename(
+        source,
+        target
+      );
+
+      this.unsynced.push(file.path);
     } finally {
-      this.notify();
+      this.finishing.delete(file.path);
     }
   }
 
-  async finishFile(f) {
-    const p = this.fds.get(f);
-    this.fds.delete(f);
-    if (p) {
-      const h = await p;
-      // Big files: flush now (cost is tiny relative to their size). Small files: flush
-      // later in parallel batches; forcing thousands of tiny files to disk one by one,
-      // in the transfer's critical path, was the main cost for photo/code folders.
-      if (this.L.files[f].size > 8 * 1024 * 1024) await h.datasync();
-      else this.unsynced.push(this.targets[f]);
-      await h.close();
-    }
-    await fsp.rename(`${this.targets[f]}.beampart`, this.targets[f]);
-    const mt = this.files[f].mtime;
-    if (mt) await fsp.utimes(this.targets[f], new Date(), new Date(mt)).catch(() => {});
-    // Recorded at the next checkpoint (every 2 s). Rewriting state per file made folders
-    // with thousands of small files crawl: the cost grew with the square of the file count.
-  }
-
-  /** Force finished small files to disk, 32 at a time in parallel. */
   async syncFinished() {
-    const list = this.unsynced.splice(0);
-    for (let i = 0; i < list.length; i += 32) {
-      await Promise.all(list.slice(i, i + 32).map(async (t) => {
-        const h = await openRetry(t, 'r+').catch(() => null); // write access: Windows needs it to flush
-        if (h) { await h.datasync().catch(() => {}); await h.close().catch(() => {}); }
-      }));
+    if (!this.unsynced.length) {
+      return;
     }
+
+    this.unsynced.length = 0;
   }
 
-  /** Flush data to disk first, then record it: state never claims more than the disk has. */
+  /*
+   * Durable checkpoint.
+   *
+   * Important:
+   * - Only one checkpoint may run at once.
+   * - Snapshot the bitmap before doing slow filesystem work.
+   * - Wait for active file handles to become durable.
+   * - Wait for files being finalized.
+   * - Persist the bitmap after the data is durable.
+   */
   async checkpoint() {
-    if (!this.dirty) return;
-    this.dirty = false;
-    const snapshot = Buffer.from(this.have);
-    await Promise.all([...this.fds.values()].map((p) => p.then((h) => h.datasync()).catch(() => {})));
-    // Files whose last block is in the snapshot may still be mid-flush (a 1.5 GB file
-    // takes seconds): wait, so the record never runs ahead of what is on disk.
-    await Promise.allSettled([...this.finishing]);
-    await this.syncFinished(); // everything in the snapshot is now really on disk
-    await this.saveState(snapshot);
+    if (this.checkpointPromise) {
+      return this.checkpointPromise;
+    }
+
+    if (!this.dirty || this.ended) {
+      return;
+    }
+
+    this.checkpointPromise = (async () => {
+      try {
+        this.dirty = false;
+
+        const snapshot = Buffer.from(
+          this.have
+        );
+
+        await Promise.all(
+          [...this.fds.values()].map(
+            (p) =>
+              p
+                .then((h) => h.datasync())
+                .catch(() => {})
+          )
+        );
+
+        await Promise.allSettled(
+          [...this.finishing]
+        );
+
+        await this.syncFinished();
+
+        // Do not write a checkpoint after finalize()
+        // has started.
+        if (!this.ended) {
+          await this.saveState(
+            snapshot
+          );
+        }
+      } finally {
+        this.checkpointPromise = null;
+      }
+    })();
+
+    return this.checkpointPromise;
   }
 
   async saveManifest() {
-    if (this.ended) return;
-    const L = this.L;
-    await fsp.mkdir(path.dirname(this.stateFile), { recursive: true });
+    const manifest = {
+      id: this.id,
+      files: this.layout.files,
+      totalBytes: this.layout.totalBytes,
+      totalBlocks: this.layout.totalBlocks(),
+    };
+
     const tmp = `${this.stateFile}.tmp`;
-    await fsp.writeFile(tmp, JSON.stringify({
-      id: this.id, peerId: this.peerId, total: L.total, block: L.block,
-      files: this.files, targets: this.targets, created: Date.now(),
-    }));
-    await fsp.rename(tmp, this.stateFile);
+
+    await fsp.writeFile(
+      tmp,
+      JSON.stringify(manifest)
+    );
+
+    await fsp.rename(
+      tmp,
+      this.stateFile
+    );
   }
 
-  /** Small and cheap: just the bitmap of blocks known to be on disk. */
   async saveState(bm) {
-    if (this.ended) return; // never resurrect state after the transfer finished
-    const tmp = `${this.haveFile}.tmp`;
-    await fsp.writeFile(tmp, bm);
-    await fsp.rename(tmp, this.haveFile);
-  }
-
-  notify() { const w = this.waiters; this.waiters = []; w.forEach((f) => f()); }
-
-  /** Wait until every data connection has delivered what the sender says it sent. */
-  async settle(sent, timeoutMs = 30000) {
-    const deadline = Date.now() + timeoutMs;
-    const ready = () => Object.entries(sent).every(([i, n]) => this.closedConns.has(Number(i)) || (this.recvCount.get(Number(i)) || 0) >= n)
-      && this.pending.size === 0;
-    while (!ready() && Date.now() < deadline) {
-      await new Promise((r) => { this.waiters.push(r); setTimeout(r, 200); });
+    if (this.ended) {
+      return;
     }
+
+    const tmp = `${this.haveFile}.tmp`;
+
+    await fsp.writeFile(
+      tmp,
+      bm
+    );
+
+    await fsp.rename(
+      tmp,
+      this.haveFile
+    );
   }
 
-  complete() { return this.count === this.L.total; }
+  complete() {
+    return (
+      bits.count(this.have) >=
+      this.layout.totalBlocks()
+    );
+  }
 
   async finalize() {
-    for (const f of [...this.fds.keys()]) await this.finishFile(f).catch(() => {});
-    await this.syncFinished(); // "Done" means on disk, not just in the OS cache
-    this.ended = true;
-    await fsp.unlink(this.stateFile).catch(() => {});
-    await fsp.unlink(this.haveFile).catch(() => {});
-  }
-
-  async suspend() {
-    await this.checkpoint().catch(() => {});
-    this.dirty = true;
-    await this.checkpoint().catch(() => {});
-    for (const p of this.fds.values()) await p.then((h) => h.close()).catch(() => {});
-    this.fds.clear();
-  }
-}
-
-// ================================================================== Sender side
-class Outgoing {
-  constructor(files, block = BLOCK) {
-    this.files = files; // [{abs, path, size, mtime}]
-    this.L = new Layout(files, block);
-    this.fds = new Map();
-    this.users = new Map();     // file -> reads in progress
-    this.lastRead = new Set();  // files whose last block has been read
-    this.queue = [];
-    this.qi = 0;
-  }
-  setHave(have) {
-    this.have = have;
-    this.queue = [];
-    for (let g = 0; g < this.L.total; g++) if (!bits.get(have, g)) this.queue.push(g);
-    this.qi = 0;
-  }
-  next() { return this.qi < this.queue.length ? this.queue[this.qi++] : null; }
-  async fd(f) {
-    let p = this.fds.get(f);
-    if (!p) { p = openRetry(this.files[f].abs, 'r'); this.fds.set(f, p); this.lastRead.delete(f); }
-    return p;
-  }
-  /** Read block g into a buffer prefixed with its 8-byte index. */
-  async read(g) {
-    const [f, b] = this.L.locate(g);
-    const len = this.L.len(g);
-    const buf = Buffer.allocUnsafe(8 + len);
-    buf.writeBigUInt64BE(BigInt(g), 0);
-    this.users.set(f, (this.users.get(f) || 0) + 1);
-    try {
-      const h = await this.fd(f);
-      let off = 0;
-      while (off < len) {
-        const { bytesRead } = await h.read(buf, 8 + off, len - off, b * this.L.block + off);
-        if (!bytesRead) throw new Error(`${this.files[f].path} got shorter while sending`);
-        off += bytesRead;
-      }
-      if (b === this.L.blocks(f) - 1) this.lastRead.add(f);
-    } finally {
-      // Close as soon as the file's last block is read and nobody else is reading it.
-      // Holding thousands open hits the OS limit (macOS allows 256 by default).
-      const n = this.users.get(f) - 1;
-      if (n) this.users.set(f, n);
-      else {
-        this.users.delete(f);
-        if (this.lastRead.has(f)) {
-          const p = this.fds.get(f);
-          this.fds.delete(f);
-          this.lastRead.delete(f);
-          if (p) p.then((h) => h.close()).catch(() => {});
-        }
-      }
+    for (
+      const f of [...this.fds.keys()]
+    ) {
+      await this.finishFile(f).catch(
+        () => {}
+      );
     }
-    return buf;
+
+    await this.syncFinished();
+
+    // If a checkpoint is already running,
+    // wait for it to finish before removing
+    // the checkpoint files.
+    if (this.checkpointPromise) {
+      await this.checkpointPromise.catch(
+        () => {}
+      );
+    }
+
+    // Blocks may have arrived while the previous
+    // checkpoint was running. Persist them before
+    // final cleanup.
+    if (
+      this.dirty &&
+      !this.ended
+    ) {
+      await this.checkpoint().catch(
+        () => {}
+      );
+    }
+
+    this.ended = true;
+
+    await fsp.unlink(
+      this.stateFile
+    ).catch(() => {});
+
+    await fsp.unlink(
+      this.haveFile
+    ).catch(() => {});
+
+    await fsp.rm(
+      path.join(
+        this.incomingDir,
+        `${this.id}.beampart`
+      ),
+      {
+        recursive: true,
+        force: true,
+      }
+    );
   }
-  async close() { for (const p of this.fds.values()) (await p.catch(() => null))?.close().catch(() => {}); this.fds.clear(); }
 }
 
-module.exports = { openRetry, BLOCK, T, Layout, bits, bytesIn, safeRelative, expandSelection, transferId, Incoming, Outgoing };
+module.exports = {
+  BLOCK,
+  bits,
+  Layout,
+  Incoming,
+};
