@@ -110,6 +110,7 @@ class Incoming {
     this.dirty = false;
     this.madeDirs = new Set();
     this.unsynced = [];        // finished small files not yet forced to disk
+    this.finishing = new Set(); // file completions in progress (flush + rename)
   }
 
   static async loadState(stateDir, id) {
@@ -144,7 +145,23 @@ class Incoming {
         const n = L.blocks(f);
         const c = bits.count(this.have, L.start[f], L.start[f + 1]);
         if (c === n && n > 0) {
-          const ok = await fsp.stat(t).then((s) => s.size === L.files[f].size, () => false);
+          let ok = await fsp.stat(t).then((s) => s.size === L.files[f].size, () => false);
+          if (!ok) {
+            // Every block arrived, but Beam stopped before renaming "name.beampart" to
+            // "name". A full-size .beampart is that finished data: complete the rename
+            // instead of fetching it all again. (A wrong size is a damaged leftover and
+            // is not trusted.)
+            const part = `${t}.beampart`;
+            if (await fsp.stat(part).then((s) => s.isFile() && s.size === L.files[f].size, () => false)) {
+              const h = await openRetry(part, 'r+');
+              await h.datasync();
+              await h.close();
+              await fsp.rename(part, t);
+              const mt = L.files[f].mtime;
+              if (mt) await fsp.utimes(t, new Date(), new Date(mt)).catch(() => {});
+              ok = true;
+            }
+          }
           if (!ok) for (let g = L.start[f]; g < L.start[f + 1]; g++) bits.clear(this.have, g);
         } else if (c > 0) {
           const ok = await fsp.stat(`${t}.beampart`).then((s) => s.size === L.files[f].size, () => false);
@@ -249,7 +266,11 @@ class Incoming {
         this.dirty = true;
         // The block stays "pending" until its file is flushed, renamed and recorded, so the
         // transfer can't be declared complete while the last file is still a .beampart.
-        if (--this.fileLeft[f] === 0) await this.finishFile(f);
+        if (--this.fileLeft[f] === 0) {
+        const done = this.finishFile(f);
+        this.finishing.add(done);
+        try { await done; } finally { this.finishing.delete(done); }
+      }
       } finally {
         this.pending.delete(g);
       }
@@ -294,6 +315,9 @@ class Incoming {
     this.dirty = false;
     const snapshot = Buffer.from(this.have);
     await Promise.all([...this.fds.values()].map((p) => p.then((h) => h.datasync()).catch(() => {})));
+    // Files whose last block is in the snapshot may still be mid-flush (a 1.5 GB file
+    // takes seconds): wait, so the record never runs ahead of what is on disk.
+    await Promise.allSettled([...this.finishing]);
     await this.syncFinished(); // everything in the snapshot is now really on disk
     await this.saveState(snapshot);
   }
