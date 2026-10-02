@@ -58,10 +58,18 @@ function createWindow() {
 function openExternal(url) { if (/^https?:\/\//.test(url)) shell.openExternal(url); }
 
 function showWindow() {
-  if (!win) return;
-  if (process.platform === 'darwin') app.dock?.show();
-  if (win.isMinimized()) win.restore();
+  if (!win || win.isDestroyed()) return;
+
+  if (process.platform === 'darwin') {
+    app.dock?.show();
+  }
+
+  if (win.isMinimized()) {
+    win.restore();
+  }
+
   win.show();
+  win.moveTop();
   win.focus();
 }
 
@@ -74,8 +82,10 @@ function createTray() {
   const rebuild = () => tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Open Beam', click: showWindow },
     { type: 'separator' },
-    { label: 'Start Beam when I log in', type: 'checkbox', checked: app.getLoginItemSettings().openAtLogin,
-      click: (item) => { app.setLoginItemSettings({ openAtLogin: item.checked, args: ['--hidden'], openAsHidden: true }); } },
+    {
+      label: 'Start Beam when I log in', type: 'checkbox', checked: app.getLoginItemSettings().openAtLogin,
+      click: (item) => { app.setLoginItemSettings({ openAtLogin: item.checked, args: ['--hidden'], openAsHidden: true }); }
+    },
     { type: 'separator' },
     { label: 'Quit Beam', click: () => quit() },
   ]));
@@ -98,7 +108,7 @@ async function quit() {
 }
 app.on('before-quit', (e) => { if (!quitting) { e.preventDefault(); quit(); } });
 app.on('activate', showWindow); // macOS dock click
-app.on('window-all-closed', () => {}); // stay alive in the tray
+app.on('window-all-closed', () => { }); // stay alive in the tray
 
 function notify(title, body) {
   if (Notification.isSupported()) new Notification({ title, body, silent: false }).show();
@@ -132,7 +142,7 @@ ipcMain.handle('beam:pick', async (event, kind) => {
   if (r.canceled) return [];
   return r.filePaths.map((p) => {
     let st = null;
-    try { st = fs.statSync(p); } catch {}
+    try { st = fs.statSync(p); } catch { }
     return { path: p, name: path.basename(p), dir: !!st?.isDirectory(), size: st && st.isFile() ? st.size : 0 };
   });
 });
@@ -169,7 +179,7 @@ function setupUpdates() {
     notify(`Beam ${i.version} is ready`, 'It installs the next time Beam restarts, never during a transfer.');
   });
   autoUpdater.on('error', (e) => set({ state: 'error', error: String(e.message || e).split('\n')[0] }));
-  const check = () => autoUpdater.checkForUpdates().catch(() => {});
+  const check = () => autoUpdater.checkForUpdates().catch(() => { });
   check();
   setInterval(check, 6 * 60 * 60 * 1000);
 }

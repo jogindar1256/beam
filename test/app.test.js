@@ -127,7 +127,12 @@ async function ev(line, fn, arg) {
 
   // 9. Quitting during a transfer asks first (dialog stubbed to answer "Keep running")
   const big = path.join(T, 'big.bin');
-  { const fd = fs.openSync(big, 'w'); const c = crypto.randomBytes(20e6); for (let i = 0; i < 20; i++) fs.writeSync(fd, c); fs.closeSync(fd); } // 400 MB without one huge allocation
+  {
+  const fd = fs.openSync(big, 'w');
+  const c = crypto.randomBytes(20e6);
+  for (let i = 0; i < 100; i++) fs.writeSync(fd, c);
+  fs.closeSync(fd);
+} // 2 GB without one huge allocationn
 
   await ev(107, ({ dialog }, p) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [p] }); global.__asked = 0; dialog.showMessageBox = async () => { global.__asked++; return { response: 0 }; }; }, big);
 
