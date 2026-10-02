@@ -273,7 +273,7 @@ class Incoming {
     // Create an early durable checkpoint during fast transfers.
     // The normal core timer is 2 seconds, but a fast local transfer
     // can finish before that timer fires.
-    this.nextCheckpointBytes = 64 * 1024 * 1024;
+    this.nextCheckpointBytes = 128 * 1024 * 1024;
     this.checkpointStepBytes = 256 * 1024 * 1024;
 
     this.madeDirs = new Set();
